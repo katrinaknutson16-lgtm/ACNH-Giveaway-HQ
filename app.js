@@ -57,4 +57,199 @@ $('backup').onclick=()=>download(JSON.stringify({groups,giveaways,exportedAt:new
 $('starter').onclick=async()=>{if(groups.length&&!confirm('Add Star Crafters and Inner Circle to your existing groups?'))return;const names=[['ACNH Star Crafters','#4489d4'],['ACNH Inner Circle','#9362c5']];for(const [name,color] of names){if(groups.some(g=>g.name===name))continue;const {error:err}=await client.from('groups').insert({user_id:user.id,name,color});if(err)return error(err)}await refresh();alert('Your two starter groups are ready. Add upcoming giveaways using their actual closing dates.')};
 function utc(d){return d.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'')}function icsEsc(s){return String(s||'').replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;')}
 $('exportIcs').onclick=()=>{let lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//ACNH Giveaway HQ//EN'];for(const x of giveaways.filter(x=>x.status!=='done')){let d=new Date(x.closes_at);lines.push('BEGIN:VEVENT','UID:'+x.id+'@acnh-hq','DTSTAMP:'+utc(new Date()),'DTSTART:'+utc(d),'DTEND:'+utc(new Date(d.getTime()+600000)),'SUMMARY:'+icsEsc('Close '+groupName(x.group_id)+': '+x.title),'DESCRIPTION:'+icsEsc(x.prize),'BEGIN:VALARM','ACTION:DISPLAY','TRIGGER:PT0M','DESCRIPTION:Close giveaway','END:VALARM','END:VEVENT')}lines.push('END:VCALENDAR');download(lines.join('\r\n'),'ACNH-HQ-alerts.ics','text/calendar')};
+
+/* ACNH Giveaway HQ — Schedule Import */
+
+let scheduledPosts = [];
+
+const schedulePanel = document.createElement('section');
+schedulePanel.className = 'panel';
+schedulePanel.innerHTML = `
+  <h2>📅 My Weekly Schedule</h2>
+  <p class="muted">
+    Import your Star Crafters and Inner Circle
+    posting schedules.
+  </p>
+  <div class="row">
+    <button id="importSchedule" class="primary">
+      📥 Import Schedule
+    </button>
+    <button id="refreshSchedule">
+      🔄 Refresh Schedule
+    </button>
+  </div>
+  <div id="scheduledPostList"></div>
+`;
+
+$('app').appendChild(schedulePanel);
+
+async function loadScheduledPosts() {
+  if (!user) return;
+
+  const { data, error: err } = await client
+    .from('scheduled_posts')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('scheduled_at');
+
+  if (err) {
+    console.error('Schedule loading error:', err);
+    $('scheduledPostList').textContent = err.message;
+    return;
+  }
+
+  scheduledPosts = data || [];
+  renderScheduledPosts();
+}
+
+function renderScheduledPosts() {
+  const list = $('scheduledPostList');
+  if (!list) return;
+
+  list.innerHTML = scheduledPosts.length
+    ? scheduledPosts.map(post => `
+        <article>
+          <b>${esc(post.title)}</b>
+          <div class="muted">
+            ${esc(groupName(post.group_id))}
+            · ${new Date(post.scheduled_at).toLocaleString()}
+          </div>
+          <div class="muted">${esc(post.notes)}</div>
+        </article>
+      `).join('')
+    : '<p class="muted">No scheduled posts yet.</p>';
+
+  // Add scheduled posts to the existing calendar.
+  document.querySelectorAll('#calendar [data-day]')
+    .forEach(day => {
+      const date = day.dataset.day;
+
+      scheduledPosts
+        .filter(post =>
+          dayKey(new Date(post.scheduled_at)) === date
+        )
+        .slice(0, 3)
+        .forEach(post => {
+          const event = document.createElement('div');
+          event.className = 'event';
+          event.style.background =
+            colorFor(post.group_id) + '33';
+          event.textContent = '📌 ' + post.title;
+          day.appendChild(event);
+        });
+    });
+}
+
+const originalRefresh = refresh;
+refresh = async function() {
+  await originalRefresh();
+  await loadScheduledPosts();
+};
+
+const originalRender = render;
+render = function() {
+  originalRender();
+  renderScheduledPosts();
+};
+
+$('refreshSchedule').onclick = loadScheduledPosts;
+
+$('importSchedule').onclick = async () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+
+  input.onchange = async () => {
+    try {
+      const file = input.files[0];
+      if (!file) return;
+
+      const records = JSON.parse(await file.text());
+
+      if (!Array.isArray(records)) {
+        throw new Error(
+          'Schedule file must contain a list of posts.'
+        );
+      }
+
+      if (!groups.length) {
+        throw new Error(
+          'Please load your starter groups first.'
+        );
+      }
+
+      const existing = await client
+        .from('scheduled_posts')
+        .select('import_key')
+        .eq('user_id', user.id);
+
+      if (existing.error) throw existing.error;
+
+      const keys = new Set(
+        (existing.data || [])
+          .map(x => x.import_key)
+          .filter(Boolean)
+      );
+
+      const rows = [];
+
+      for (const post of records) {
+        const group = groups.find(
+          g => g.name === post.group
+        );
+
+        if (!group) {
+          throw new Error(
+            'Unknown group: ' + post.group
+          );
+        }
+
+        const date = new Date(post.scheduled_at);
+
+        if (!Number.isFinite(date.getTime())) {
+          throw new Error(
+            'Invalid date for ' + post.title
+          );
+        }
+
+        const key = post.import_key ||
+          `${post.group}|${post.title}|${date.toISOString()}`;
+
+        if (keys.has(key)) continue;
+        keys.add(key);
+
+        rows.push({
+          user_id: user.id,
+          group_id: group.id,
+          title: post.title,
+          scheduled_at: date.toISOString(),
+          post_type: post.post_type || 'engagement',
+          notes: post.notes || '',
+          import_key: key
+        });
+      }
+
+      if (rows.length) {
+        const { error: err } = await client
+          .from('scheduled_posts')
+          .insert(rows);
+
+        if (err) throw err;
+      }
+
+      await loadScheduledPosts();
+
+      alert(
+        `Imported ${rows.length} new scheduled posts!`
+      );
+
+    } catch (err) {
+      console.error(err);
+      alert('Import failed: ' + err.message);
+    }
+  };
+
+  input.click();
+};
+
 if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});init().catch(error);
