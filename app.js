@@ -8,7 +8,35 @@ function colorFor(id){return groups.find(g=>g.id===id)?.color||'#7787a2'}
 function groupName(id){return groups.find(g=>g.id===id)?.name||'Unknown group'}
 function download(text,name,type){const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000)}
 function error(e){alert(e?.message||String(e))}
-async function init(){if(!cfg.supabaseUrl||!cfg.supabaseAnonKey)return;$('setup').classList.add('hidden');client=createClient(cfg.supabaseUrl,cfg.supabaseAnonKey);client.auth.onAuthStateChange((_event,session)=>{setTimeout(()=>setSession(session),0)});const {data}=await client.auth.getSession();await setSession(data.session)}
+
+async function init() {
+  if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) return;
+
+  client = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+
+  client.auth.onAuthStateChange((_event, session) => {
+    setTimeout(() => setSession(session), 0);
+  });
+
+  // Display the sign-in screen immediately.
+  $('setup').classList.add('hidden');
+  $('auth').classList.remove('hidden');
+
+  try {
+    const { data, error: sessionError } =
+      await client.auth.getSession();
+
+    if (sessionError) {
+      console.error('Supabase session error:', sessionError);
+    }
+
+    await setSession(data?.session ?? null);
+  } catch (err) {
+    console.error('Authentication initialization failed:', err);
+    $('auth').classList.remove('hidden');
+  }
+}
+
 async function setSession(session){const next=session?.user||null;if(user?.id===next?.id)return;user=next;$('auth').classList.toggle('hidden',!!user);$('app').classList.toggle('hidden',!user);if(channel){await client.removeChannel(channel);channel=null}if(!user)return;$('who').textContent='Signed in: '+user.email;await refresh();channel=client.channel('my-planner-'+user.id).on('postgres_changes',{event:'*',schema:'public',table:'groups',filter:'user_id=eq.'+user.id},refresh).on('postgres_changes',{event:'*',schema:'public',table:'giveaways',filter:'user_id=eq.'+user.id},refresh).subscribe()}
 async function refresh(){if(!user)return;const [a,b]=await Promise.all([client.from('groups').select('*').eq('user_id',user.id).order('created_at'),client.from('giveaways').select('*').eq('user_id',user.id).order('closes_at')]);if(a.error||b.error){$('syncStatus').textContent='Sync error';return error(a.error||b.error)}groups=a.data;giveaways=b.data;$('syncStatus').textContent='☁️ Synced';render()}
 async function authAction(kind){const email=$('email').value.trim(),password=$('password').value;$('authMsg').textContent='';let result;if(kind==='in')result=await client.auth.signInWithPassword({email,password});if(kind==='up')result=await client.auth.signUp({email,password});if(kind==='google')result=await client.auth.signInWithOAuth({provider:'google',options:{redirectTo:location.origin+location.pathname}});if(kind==='reset')result=await client.auth.resetPasswordForEmail(email,{redirectTo:location.origin+location.pathname});if(result.error)$('authMsg').textContent=result.error.message;else if(kind==='up')$('authMsg').textContent='Account created. Check your email if confirmation is enabled.';else if(kind==='reset')$('authMsg').textContent='Check your email for a password reset link.'}
