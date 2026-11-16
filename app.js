@@ -114,7 +114,20 @@ function renderScheduledPosts() {
             ${esc(groupName(post.group_id))}
             · ${new Date(post.scheduled_at).toLocaleString()}
           </div>
-          <div class="muted">${esc(post.notes)}</div>
+          
+<div class="muted">${esc(post.notes)}</div>
+<div class="row" style="margin-top:10px">
+  <button
+    type="button"
+    data-posted-id="${post.id}"
+    class="${post.completed ? '' : 'primary'}">
+    ${post.completed ? '↩ Mark as Not Posted' : '✓ Mark as Posted'}
+  </button>
+  <span class="muted">
+    ${post.completed ? '✅ Posted' : '⏳ Not posted yet'}
+  </span>
+</div>
+
         </article>
       `).join('')
     : '<p class="muted">No scheduled posts yet.</p>';
@@ -251,5 +264,33 @@ $('importSchedule').onclick = async () => {
 
   input.click();
 };
+
+/* Save whether a scheduled post has been posted. */
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-posted-id]');
+  if (!button || !user || !client) return;
+
+  const post = scheduledPosts.find(
+    item => item.id === button.dataset.postedId
+  );
+
+  if (!post) return;
+
+  button.disabled = true;
+
+  const { error: err } = await client
+    .from('scheduled_posts')
+    .update({ completed: !post.completed })
+    .eq('id', post.id)
+    .eq('user_id', user.id);
+
+  if (err) {
+    button.disabled = false;
+    alert('Could not update post: ' + err.message);
+    return;
+  }
+
+  await loadScheduledPosts();
+});
 
 if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});init().catch(error);
