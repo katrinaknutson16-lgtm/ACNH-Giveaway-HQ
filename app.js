@@ -58,238 +58,216 @@ $('starter').onclick=async()=>{if(groups.length&&!confirm('Add Star Crafters and
 function utc(d){return d.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'')}function icsEsc(s){return String(s||'').replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;')}
 $('exportIcs').onclick=()=>{let lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//ACNH Giveaway HQ//EN'];for(const x of giveaways.filter(x=>x.status!=='done')){let d=new Date(x.closes_at);lines.push('BEGIN:VEVENT','UID:'+x.id+'@acnh-hq','DTSTAMP:'+utc(new Date()),'DTSTART:'+utc(d),'DTEND:'+utc(new Date(d.getTime()+600000)),'SUMMARY:'+icsEsc('Close '+groupName(x.group_id)+': '+x.title),'DESCRIPTION:'+icsEsc(x.prize),'BEGIN:VALARM','ACTION:DISPLAY','TRIGGER:PT0M','DESCRIPTION:Close giveaway','END:VALARM','END:VEVENT')}lines.push('END:VCALENDAR');download(lines.join('\r\n'),'ACNH-HQ-alerts.ics','text/calendar')};
 
-/* ACNH Giveaway HQ — Schedule Import */
-
+/* ACNH Giveaway HQ — interactive schedule and calendar */
 let scheduledPosts = [];
+let scheduleGroupFilter = 'all';
+let editingPostId = null;
 
 const schedulePanel = document.createElement('section');
 schedulePanel.className = 'panel';
 schedulePanel.innerHTML = `
   <h2>📅 My Weekly Schedule</h2>
-  <p class="muted">
-    Import your Star Crafters and Inner Circle
-    posting schedules.
-  </p>
+  <p class="muted">Your private posting checklist. Nothing here posts to Facebook.</p>
   <div class="row">
-    <button id="importSchedule" class="primary">
-      📥 Import Schedule
-    </button>
-    <button id="refreshSchedule">
-      🔄 Refresh Schedule
-    </button>
+    <button id="importSchedule" class="primary">📥 Import Schedule</button>
+    <button id="refreshSchedule">🔄 Refresh Schedule</button>
   </div>
-  <div id="scheduledPostList"></div>
-`;
-
+  <div id="scheduledPostList"></div>`;
 $('app').appendChild(schedulePanel);
+
+const calendarFilter = document.createElement('label');
+calendarFilter.textContent = 'Show calendar for';
+calendarFilter.style.marginTop = '12px';
+const calendarGroupSelect = document.createElement('select');
+calendarGroupSelect.id = 'calendarGroupFilter';
+calendarFilter.appendChild(calendarGroupSelect);
+$('calendar').parentElement.insertBefore(calendarFilter, $('weekdays'));
+calendarGroupSelect.onchange = () => { scheduleGroupFilter = calendarGroupSelect.value; render(); };
+
+const editDialog = document.createElement('dialog');
+editDialog.innerHTML = `<h2>Edit scheduled post</h2>
+<form id="editScheduleForm">
+<label>Title<input id="scheduleTitle" required maxlength="180"></label>
+<label>Group<select id="scheduleGroup" required></select></label>
+<label>Posting date and time<input id="scheduleDate" type="datetime-local" required></label>
+<label>Type<select id="scheduleType"><option value="engagement">Engagement</option><option value="game">Game</option><option value="giveaway">Giveaway</option></select></label>
+<label>Notes<textarea id="scheduleNotes" rows="3"></textarea></label>
+<div class="row"><button class="primary" type="submit">Save changes</button><button type="button" id="cancelScheduleEdit">Cancel</button></div>
+</form>`;
+document.body.appendChild(editDialog);
+$('cancelScheduleEdit').onclick = () => editDialog.close();
+
+function groupAllowed(groupId) { return scheduleGroupFilter === 'all' || scheduleGroupFilter === groupId; }
+function updateCalendarGroupFilter() {
+  const selectedValue = scheduleGroupFilter;
+  calendarGroupSelect.innerHTML = '<option value="all">💙💜 Both groups</option>' +
+    groups.map(g => `<option value="${g.id}">${esc(g.name)}</option>`).join('');
+  if (selectedValue !== 'all' && !groups.some(g => g.id === selectedValue)) scheduleGroupFilter = 'all';
+  calendarGroupSelect.value = scheduleGroupFilter;
+}
+function scheduledPostHtml(post) {
+  return `<article>
+    <span class="pill" style="background:${colorFor(post.group_id)}33">${esc(groupName(post.group_id))}</span>
+    <div><b>${esc(post.title)}</b></div>
+    <div class="muted">${new Date(post.scheduled_at).toLocaleString('en-US', {dateStyle:'medium',timeStyle:'short'})}</div>
+    ${post.notes ? `<div class="muted">${esc(post.notes)}</div>` : ''}
+    <div class="row" style="margin-top:8px">
+      <button type="button" data-posted-id="${post.id}" class="${post.completed?'':'primary'}">${post.completed?'↩ Mark as Not Posted':'✓ Mark as Posted'}</button>
+      <button type="button" data-schedule-edit="${post.id}">✏️ Edit</button>
+      <button type="button" class="danger" data-schedule-delete="${post.id}">Delete</button>
+      ${post.post_type === 'giveaway' ? `<button type="button" data-schedule-deadline="${post.id}">🎁 Add 24h closing deadline</button>` : ''}
+      <span class="muted">${post.completed?'✅ Posted':'⏳ Not posted yet'}</span>
+    </div>
+  </article>`;
+}
+function renderScheduledPosts() {
+  updateCalendarGroupFilter();
+  const visible = scheduledPosts.filter(p => groupAllowed(p.group_id));
+  $('scheduledPostList').innerHTML = visible.length ? visible.map(scheduledPostHtml).join('') :
+    '<p class="muted">No scheduled posts for this selection.</p>';
+
+  // The original calendar renderer recreates the day cells each time.
+  document.querySelectorAll('#calendar [data-day]').forEach(day => {
+    const date = day.dataset.day;
+    const dayPosts = visible.filter(p => dayKey(new Date(p.scheduled_at)) === date);
+    const existing = [...day.querySelectorAll('.event')].length;
+    dayPosts.slice(0, Math.max(0, 4 - existing)).forEach(post => {
+      const event = document.createElement('div');
+      event.className = 'event';
+      event.style.background = colorFor(post.group_id) + '33';
+      event.title = `${post.title} — ${new Date(post.scheduled_at).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}`;
+      event.textContent = `${post.completed?'✓':'📌'} ${post.title}`;
+      day.appendChild(event);
+    });
+    if (dayPosts.length > Math.max(0, 4 - existing)) {
+      const more = document.createElement('small');
+      more.textContent = ` +${dayPosts.length - Math.max(0, 4 - existing)} posts`;
+      day.appendChild(more);
+    }
+  });
+
+  const dayPosts = visible.filter(p => dayKey(new Date(p.scheduled_at)) === selected);
+  const deadlines = giveaways.filter(g => groupAllowed(g.group_id) && dayKey(new Date(g.closes_at)) === selected);
+  $('dayList').innerHTML = `<h3>📌 Scheduled posts</h3>` +
+    (dayPosts.length ? dayPosts.map(scheduledPostHtml).join('') : '<p class="muted">No posts scheduled this day.</p>') +
+    `<h3>🎁 Giveaway closing deadlines</h3>` +
+    (deadlines.length ? deadlines.map(item).join('') : '<p class="muted">No giveaway closing deadlines this day.</p>');
+}
 
 async function loadScheduledPosts() {
   if (!user) return;
-
-  const { data, error: err } = await client
-    .from('scheduled_posts')
-    .select('*')
-    .eq('user_id', user.id)
-    .order('scheduled_at');
-
-  if (err) {
-    console.error('Schedule loading error:', err);
-    $('scheduledPostList').textContent = err.message;
-    return;
-  }
-
+  const {data, error:err} = await client.from('scheduled_posts').select('*')
+    .eq('user_id',user.id).order('scheduled_at');
+  if (err) { console.error(err); $('scheduledPostList').textContent = err.message; return; }
   scheduledPosts = data || [];
-  renderScheduledPosts();
+  render();
 }
-
-function renderScheduledPosts() {
-  const list = $('scheduledPostList');
-  if (!list) return;
-
-  list.innerHTML = scheduledPosts.length
-    ? scheduledPosts.map(post => `
-        <article>
-          <b>${esc(post.title)}</b>
-          <div class="muted">
-            ${esc(groupName(post.group_id))}
-            · ${new Date(post.scheduled_at).toLocaleString()}
-          </div>
-          
-<div class="muted">${esc(post.notes)}</div>
-<div class="row" style="margin-top:10px">
-  <button
-    type="button"
-    data-posted-id="${post.id}"
-    class="${post.completed ? '' : 'primary'}">
-    ${post.completed ? '↩ Mark as Not Posted' : '✓ Mark as Posted'}
-  </button>
-  <span class="muted">
-    ${post.completed ? '✅ Posted' : '⏳ Not posted yet'}
-  </span>
-</div>
-
-        </article>
-      `).join('')
-    : '<p class="muted">No scheduled posts yet.</p>';
-
-  // Add scheduled posts to the existing calendar.
-  document.querySelectorAll('#calendar [data-day]')
-    .forEach(day => {
-      const date = day.dataset.day;
-
-      scheduledPosts
-        .filter(post =>
-          dayKey(new Date(post.scheduled_at)) === date
-        )
-        .slice(0, 3)
-        .forEach(post => {
-          const event = document.createElement('div');
-          event.className = 'event';
-          event.style.background =
-            colorFor(post.group_id) + '33';
-          event.textContent = '📌 ' + post.title;
-          day.appendChild(event);
-        });
-    });
-}
-
 const originalRefresh = refresh;
-refresh = async function() {
-  await originalRefresh();
-  await loadScheduledPosts();
-};
-
+refresh = async function() { await originalRefresh(); await loadScheduledPosts(); };
 const originalRender = render;
 render = function() {
+  // Keep the existing giveaway filter; this filter controls calendar events only.
   originalRender();
+  // Hide deadlines for other groups in the calendar and replace its day details.
+  if (scheduleGroupFilter !== 'all') {
+    document.querySelectorAll('#calendar [data-day]').forEach(day => {
+      day.querySelectorAll('.event').forEach(el => el.remove());
+      giveaways.filter(g => groupAllowed(g.group_id) && dayKey(new Date(g.closes_at)) === day.dataset.day)
+        .slice(0,3).forEach(g => {
+          const el = document.createElement('div'); el.className = 'event';
+          el.style.background = colorFor(g.group_id)+'33'; el.textContent = '🎁 '+g.title;
+          day.appendChild(el);
+        });
+    });
+  }
   renderScheduledPosts();
 };
-
 $('refreshSchedule').onclick = loadScheduledPosts;
 
-$('importSchedule').onclick = async () => {
+$('importSchedule').onclick = () => {
   const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.json,application/json';
-
+  input.type = 'file'; input.accept = '.json,application/json';
   input.onchange = async () => {
     try {
-      const file = input.files[0];
-      if (!file) return;
-
+      const file = input.files?.[0]; if (!file) return;
       const records = JSON.parse(await file.text());
-
-      if (!Array.isArray(records)) {
-        throw new Error(
-          'Schedule file must contain a list of posts.'
-        );
-      }
-
-      if (!groups.length) {
-        throw new Error(
-          'Please load your starter groups first.'
-        );
-      }
-
-      const existing = await client
-        .from('scheduled_posts')
-        .select('import_key')
-        .eq('user_id', user.id);
-
-      if (existing.error) throw existing.error;
-
-      const keys = new Set(
-        (existing.data || [])
-          .map(x => x.import_key)
-          .filter(Boolean)
-      );
-
-      const rows = [];
-
+      if (!Array.isArray(records)) throw new Error('Schedule file must contain a list of posts.');
+      if (!groups.length) throw new Error('Load your starter groups first.');
+      const {data, error:err} = await client.from('scheduled_posts').select('import_key').eq('user_id',user.id);
+      if (err) throw err;
+      const keys = new Set((data||[]).map(x=>x.import_key).filter(Boolean));
+      const rows=[];
       for (const post of records) {
-        const group = groups.find(
-          g => g.name === post.group
-        );
-
-        if (!group) {
-          throw new Error(
-            'Unknown group: ' + post.group
-          );
-        }
-
+        const group = groups.find(g=>g.name===post.group);
+        if (!group) throw new Error('Unknown group: '+post.group);
         const date = new Date(post.scheduled_at);
-
-        if (!Number.isFinite(date.getTime())) {
-          throw new Error(
-            'Invalid date for ' + post.title
-          );
-        }
-
-        const key = post.import_key ||
-          `${post.group}|${post.title}|${date.toISOString()}`;
-
+        if (!post.title || !Number.isFinite(date.getTime())) throw new Error('Invalid title/date for '+post.title);
+        const key=post.import_key||`${post.group}|${post.title}|${date.toISOString()}`;
         if (keys.has(key)) continue;
         keys.add(key);
-
-        rows.push({
-          user_id: user.id,
-          group_id: group.id,
-          title: post.title,
-          scheduled_at: date.toISOString(),
-          post_type: post.post_type || 'engagement',
-          notes: post.notes || '',
-          import_key: key
-        });
+        rows.push({user_id:user.id,group_id:group.id,title:post.title,scheduled_at:date.toISOString(),
+          post_type:post.post_type||'engagement',notes:post.notes||'',import_key:key});
       }
-
       if (rows.length) {
-        const { error: err } = await client
-          .from('scheduled_posts')
-          .insert(rows);
-
-        if (err) throw err;
+        const {error:insertError}=await client.from('scheduled_posts').insert(rows);
+        if (insertError) throw insertError;
       }
-
       await loadScheduledPosts();
-
-      alert(
-        `Imported ${rows.length} new scheduled posts!`
-      );
-
-    } catch (err) {
-      console.error(err);
-      alert('Import failed: ' + err.message);
-    }
+      alert(`Imported ${rows.length} new scheduled posts!`);
+    } catch(err) {console.error(err);alert('Import failed: '+err.message);}
   };
-
   input.click();
 };
 
-/* Save whether a scheduled post has been posted. */
-document.addEventListener('click', async event => {
-  const button = event.target.closest('[data-posted-id]');
+function openScheduleEdit(post) {
+  editingPostId = post.id;
+  $('scheduleTitle').value=post.title;
+  $('scheduleGroup').innerHTML=groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('');
+  $('scheduleGroup').value=post.group_id;
+  $('scheduleDate').value=localInput(new Date(post.scheduled_at));
+  $('scheduleType').value=['engagement','game','giveaway'].includes(post.post_type)?post.post_type:'engagement';
+  $('scheduleNotes').value=post.notes||'';
+  editDialog.showModal();
+}
+$('editScheduleForm').onsubmit=async event => {
+  event.preventDefault();
+  const date=new Date($('scheduleDate').value);
+  if (!Number.isFinite(date.getTime())) return alert('Enter a valid date and time.');
+  const {error:err}=await client.from('scheduled_posts').update({
+    title:$('scheduleTitle').value.trim(),group_id:$('scheduleGroup').value,
+    scheduled_at:date.toISOString(),post_type:$('scheduleType').value,notes:$('scheduleNotes').value
+  }).eq('id',editingPostId).eq('user_id',user.id);
+  if (err) return error(err);
+  editDialog.close(); await loadScheduledPosts();
+};
+
+document.addEventListener('click',async event=>{
+  const button=event.target.closest('[data-posted-id],[data-schedule-edit],[data-schedule-delete],[data-schedule-deadline]');
   if (!button || !user || !client) return;
-
-  const post = scheduledPosts.find(
-    item => item.id === button.dataset.postedId
-  );
-
-  if (!post) return;
-
-  button.disabled = true;
-
-  const { error: err } = await client
-    .from('scheduled_posts')
-    .update({ completed: !post.completed })
-    .eq('id', post.id)
-    .eq('user_id', user.id);
-
-  if (err) {
-    button.disabled = false;
-    alert('Could not update post: ' + err.message);
-    return;
+  const id=button.dataset.postedId||button.dataset.scheduleEdit||button.dataset.scheduleDelete||button.dataset.scheduleDeadline;
+  const post=scheduledPosts.find(p=>p.id===id); if (!post) return;
+  if (button.dataset.scheduleEdit) return openScheduleEdit(post);
+  if (button.dataset.scheduleDelete) {
+    if (!confirm('Delete this scheduled post from your private tracker?')) return;
+    const {error:err}=await client.from('scheduled_posts').delete().eq('id',id).eq('user_id',user.id);
+    if (err) return error(err);
+    return loadScheduledPosts();
   }
-
+  if (button.dataset.scheduleDeadline) {
+    const postedAt=new Date(post.scheduled_at), closesAt=new Date(postedAt.getTime()+24*60*60*1000);
+    const duplicate=giveaways.some(g=>g.group_id===post.group_id && g.title===post.title &&
+      Math.abs(new Date(g.closes_at)-closesAt)<60000);
+    if (duplicate) return alert('This closing deadline is already tracked.');
+    if (!confirm(`Add a giveaway closing deadline for ${post.title}, 24 hours after its planned posting time? This is only a tracker entry.`)) return;
+    const {error:err}=await client.from('giveaways').insert({user_id:user.id,group_id:post.group_id,
+      title:post.title,posted_at:postedAt.toISOString(),closes_at:closesAt.toISOString(),status:'open',prize:post.notes||''});
+    if (err) return error(err);
+    return refresh();
+  }
+  button.disabled=true;
+  const {error:err}=await client.from('scheduled_posts').update({completed:!post.completed})
+    .eq('id',post.id).eq('user_id',user.id);
+  if (err) {button.disabled=false;return error(err);}
   await loadScheduledPosts();
 });
 
