@@ -2,14 +2,6 @@ import {createClient} from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2
 const $=id=>document.getElementById(id),cfg=window.ACNH_CONFIG||{};
 let client,user,groups=[],giveaways=[],view=new Date(),selected=dayKey(new Date()),editId=null,channel=null;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-
-function formatDate(date) {
-  return new Date(date).toLocaleDateString('en-US', {
-    month: '2-digit',
-    day: '2-digit',
-    year: 'numeric'
-  });
-}
 function dayKey(d){return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
 function localInput(d){return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16)}
 function colorFor(id){return groups.find(g=>g.id===id)?.color||'#7787a2'}
@@ -54,7 +46,7 @@ function render(){const now=Date.now();$('openCount').textContent=giveaways.filt
 $('groups').innerHTML=groups.length?groups.map(g=>`<span class="pill" style="background:${esc(g.color)}22;border:1px solid ${esc(g.color)};color:#34405b">${esc(g.name)}</span>`).join(''):'<span class="muted">No groups yet. Add your first group.</span>';
 $('filter').innerHTML='<option value="all">All groups</option><option value="attention">Needs attention</option>'+groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('');
 $('month').textContent=view.toLocaleDateString('en-US',{month:'long',year:'numeric'});$('weekdays').innerHTML=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(x=>`<div class="week">${x}</div>`).join('');let first=new Date(view.getFullYear(),view.getMonth(),1),start=new Date(first);start.setDate(start.getDate()-first.getDay());let html='';for(let i=0;i<42;i++){let d=new Date(start);d.setDate(start.getDate()+i);let k=dayKey(d),items=giveaways.filter(x=>dayKey(new Date(x.closes_at))===k);html+=`<div class="day ${k===selected?'active':''} ${d.getMonth()!==view.getMonth()?'other':''}" data-day="${k}"><b style="font-size:12px">${d.getDate()}</b>${items.slice(0,3).map(x=>`<div class="event" style="background:${colorFor(x.group_id)}33">${esc(x.title)}</div>`).join('')}${items.length>3?'<small>+'+(items.length-3)+'</small>':''}</div>`}$('calendar').innerHTML=html;
-$('dayTitle').textContent=formatDate(selected+'T12:00:00');const day=giveaways.filter(x=>dayKey(new Date(x.closes_at))===selected);$('dayList').innerHTML=day.length?day.map(item).join(''):'<p class="muted">No closing deadlines this day.</p>';
+$('dayTitle').textContent=new Date(selected+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});const day=giveaways.filter(x=>dayKey(new Date(x.closes_at))===selected);$('dayList').innerHTML=day.length?day.map(item).join(''):'<p class="muted">No closing deadlines this day.</p>';
 const f=$('filter').value;let arr=giveaways.filter(x=>f==='all'||(f==='attention'?x.status!=='done':x.group_id===f));$('giveawayList').innerHTML=arr.length?arr.map(item).join(''):'<p class="muted">Nothing here yet. Add a giveaway to begin.</p>'}
 function item(x){const status={open:'Open',draw:'Choose winner',announce:'Announce winner',done:'Completed'}[x.status];return `<article><span class="pill" style="background:${colorFor(x.group_id)}33">${esc(groupName(x.group_id))}</span> <span class="muted">${new Date(x.closes_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span><div><b>${esc(x.title)}</b></div><div class="muted">${status} · ${esc(x.prize)}${x.winner?' · Winner: '+esc(x.winner):''}</div><div class="row" style="margin-top:8px">${x.status!=='done'?`<button data-action="advance" data-id="${x.id}">${x.status==='open'?'Close entries':x.status==='draw'?'Winner chosen':'Mark announced'}</button>`:''}<button data-action="edit" data-id="${x.id}">Edit</button><button class="danger" data-action="delete" data-id="${x.id}">Delete</button></div></article>`}
 function openGiveaway(x){if(!groups.length)return alert('Add a group first.');editId=x?.id||null;$('formTitle').textContent=x?'Edit giveaway':'New giveaway';$('title').value=x?.title||'';$('groupId').innerHTML=groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('');$('groupId').value=x?.group_id||groups[0].id;$('postedAt').value=x?.posted_at?localInput(new Date(x.posted_at)):localInput(new Date());$('closesAt').value=x?.closes_at?localInput(new Date(x.closes_at)):localInput(new Date(Date.now()+86400000));$('prize').value=x?.prize||'';$('status').value=x?.status||'open';$('winner').value=x?.winner||'';$('giveawayDialog').showModal()}
@@ -77,7 +69,7 @@ schedulePanel.innerHTML = `
   <h2>📅 My Weekly Schedule</h2>
   <p class="muted">Your private posting checklist. Nothing here posts to Facebook.</p>
   <div class="row">
-    <button id="importSchedule" class="primary">📥 Import Schedule</button>
+    <button id="addSchedule" class="primary">➕ Add Post</button>
     <button id="refreshSchedule">🔄 Refresh Schedule</button>
   </div>
   <div id="scheduledPostList"></div>`;
@@ -93,14 +85,14 @@ $('calendar').parentElement.insertBefore(calendarFilter, $('weekdays'));
 calendarGroupSelect.onchange = () => { scheduleGroupFilter = calendarGroupSelect.value; render(); };
 
 const editDialog = document.createElement('dialog');
-editDialog.innerHTML = `<h2>Edit scheduled post</h2>
+editDialog.innerHTML = `<h2 id="scheduleDialogTitle">Scheduled post</h2>
 <form id="editScheduleForm">
 <label>Title<input id="scheduleTitle" required maxlength="180"></label>
 <label>Group<select id="scheduleGroup" required></select></label>
 <label>Posting date and time<input id="scheduleDate" type="datetime-local" required></label>
 <label>Type<select id="scheduleType"><option value="engagement">Engagement</option><option value="game">Game</option><option value="giveaway">Giveaway</option></select></label>
 <label>Notes<textarea id="scheduleNotes" rows="3"></textarea></label>
-<div class="row"><button class="primary" type="submit">Save changes</button><button type="button" id="cancelScheduleEdit">Cancel</button></div>
+<div class="row"><button class="primary" type="submit">Save post</button><button type="button" id="cancelScheduleEdit">Cancel</button></div>
 </form>`;
 document.body.appendChild(editDialog);
 $('cancelScheduleEdit').onclick = () => editDialog.close();
@@ -192,59 +184,36 @@ render = function() {
 };
 $('refreshSchedule').onclick = loadScheduledPosts;
 
-$('importSchedule').onclick = () => {
-  const input = document.createElement('input');
-  input.type = 'file'; input.accept = '.json,application/json';
-  input.onchange = async () => {
-    try {
-      const file = input.files?.[0]; if (!file) return;
-      const records = JSON.parse(await file.text());
-      if (!Array.isArray(records)) throw new Error('Schedule file must contain a list of posts.');
-      if (!groups.length) throw new Error('Load your starter groups first.');
-      const {data, error:err} = await client.from('scheduled_posts').select('import_key').eq('user_id',user.id);
-      if (err) throw err;
-      const keys = new Set((data||[]).map(x=>x.import_key).filter(Boolean));
-      const rows=[];
-      for (const post of records) {
-        const group = groups.find(g=>g.name===post.group);
-        if (!group) throw new Error('Unknown group: '+post.group);
-        const date = new Date(post.scheduled_at);
-        if (!post.title || !Number.isFinite(date.getTime())) throw new Error('Invalid title/date for '+post.title);
-        const key=post.import_key||`${post.group}|${post.title}|${date.toISOString()}`;
-        if (keys.has(key)) continue;
-        keys.add(key);
-        rows.push({user_id:user.id,group_id:group.id,title:post.title,scheduled_at:date.toISOString(),
-          post_type:post.post_type||'engagement',notes:post.notes||'',import_key:key});
-      }
-      if (rows.length) {
-        const {error:insertError}=await client.from('scheduled_posts').insert(rows);
-        if (insertError) throw insertError;
-      }
-      await loadScheduledPosts();
-      alert(`Imported ${rows.length} new scheduled posts!`);
-    } catch(err) {console.error(err);alert('Import failed: '+err.message);}
-  };
-  input.click();
-};
-
-function openScheduleEdit(post) {
-  editingPostId = post.id;
-  $('scheduleTitle').value=post.title;
+function openScheduleEdit(post = null) {
+  if (!groups.length) return alert('Add a group first.');
+  editingPostId = post?.id || null;
+  $('scheduleDialogTitle').textContent = post ? 'Edit scheduled post' : 'Add scheduled post';
+  $('scheduleTitle').value=post?.title || '';
   $('scheduleGroup').innerHTML=groups.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('');
-  $('scheduleGroup').value=post.group_id;
-  $('scheduleDate').value=localInput(new Date(post.scheduled_at));
-  $('scheduleType').value=['engagement','game','giveaway'].includes(post.post_type)?post.post_type:'engagement';
-  $('scheduleNotes').value=post.notes||'';
+  $('scheduleGroup').value=post?.group_id || (scheduleGroupFilter !== 'all' ? scheduleGroupFilter : groups[0].id);
+  $('scheduleDate').value=localInput(post ? new Date(post.scheduled_at) : new Date(selected + 'T08:00:00'));
+  $('scheduleType').value=post && ['engagement','game','giveaway'].includes(post.post_type)?post.post_type:'engagement';
+  $('scheduleNotes').value=post?.notes || '';
   editDialog.showModal();
 }
+$('addSchedule').onclick = () => openScheduleEdit();
 $('editScheduleForm').onsubmit=async event => {
   event.preventDefault();
   const date=new Date($('scheduleDate').value);
   if (!Number.isFinite(date.getTime())) return alert('Enter a valid date and time.');
-  const {error:err}=await client.from('scheduled_posts').update({
-    title:$('scheduleTitle').value.trim(),group_id:$('scheduleGroup').value,
-    scheduled_at:date.toISOString(),post_type:$('scheduleType').value,notes:$('scheduleNotes').value
-  }).eq('id',editingPostId).eq('user_id',user.id);
+  const title = $('scheduleTitle').value.trim();
+  const groupId = $('scheduleGroup').value;
+  if (!title) return alert('Enter an activity name.');
+  const duplicate = scheduledPosts.some(p => p.id !== editingPostId &&
+    p.group_id === groupId && p.title.trim().toLowerCase() === title.toLowerCase() &&
+    new Date(p.scheduled_at).getTime() === date.getTime());
+  if (duplicate) return alert('This activity is already scheduled for this group at this date and time.');
+  const row = {title, group_id:groupId, scheduled_at:date.toISOString(),
+    post_type:$('scheduleType').value, notes:$('scheduleNotes').value};
+  const query = editingPostId
+    ? client.from('scheduled_posts').update(row).eq('id',editingPostId).eq('user_id',user.id)
+    : client.from('scheduled_posts').insert({...row, user_id:user.id});
+  const {error:err}=await query;
   if (err) return error(err);
   editDialog.close(); await loadScheduledPosts();
 };
@@ -279,4 +248,5 @@ document.addEventListener('click',async event=>{
   await loadScheduledPosts();
 });
 
-if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});init().catch(error);
+if ('serviceWorker' in navigator) navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(()=>{});
+init().catch(error);
